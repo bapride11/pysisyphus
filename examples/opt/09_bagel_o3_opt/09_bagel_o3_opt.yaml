@@ -1,0 +1,12 @@
+opt:
+ type: bfgs                      # Optimization algorithm
+ thresh: baker                 # Maximum number of optimization cycles
+ do_hess: False                  # Calculate the hessian at the final geometry
+
+calc:
+  type: bagel
+  json_file: 09_bagel_o3_opt.json
+
+geom:
+ type: cart
+ fn: o3.xyz

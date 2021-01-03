@@ -114,6 +114,27 @@ XTB 6.2
     :undoc-members:
     :show-inheritance:
 
+BAGEL (BAGEL commit c297051faafdc6c0814db7eacbe9ee6eb970d05d)
+-------
+
+Much like for Turbomole, the BAGEL calculator requires the user to create a
+slightly modified BAGEL input json file that computes a gradient using the
+method of interest. The path to this file is given by the `json_file` argument.
+While optimization of excited states is possible by setting a different target state
+in the BAGEL input, no excited state tracking is yet implemented.
+
+In the BAGEL `molecule` block, the geometry input is replaced with the string: INSERT_XYZ
+
+In the BAGEL `force` block, the keywords `export` and `export_single` both must be
+set to true.
+
+An example input for the CASPT2 optimization of ozone is provided in the "examples/opt" folder.
+
+.. automodule:: pysisyphus.calculators.BAGEL
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 Pure Python calculators & wrappers
 ==================================
 

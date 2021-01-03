@@ -1,0 +1,40 @@
+{ "bagel" : [
+
+{
+"title" : "molecule",
+"basis" : "svp",
+"df_basis" : "svp-jkfit",
+"angstrom" : false,
+"geometry" : [
+INSERT_XYZ
+]
+},
+{
+"title" : "hf",
+"nspin" : 0
+},
+{
+"title" : "casscf",
+"nstate" : 1,
+"nspin" : 0,
+"nact" : 3,
+"nclosed" : 10
+},
+{
+"title" : "force",
+"target" : 0,
+"export" : true,
+"export_single" : true,
+"method" : [ {
+    "title" : "caspt2",
+    "smith" : {
+    "method" : "caspt2",
+    "frozen" : true
+    },
+    "nstate" : 1,
+    "nact" : 3,
+    "nclosed": 10,
+    "nspin": 0
+} ]
+}
+] }
