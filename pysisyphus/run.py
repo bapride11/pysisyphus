@@ -71,6 +71,8 @@ CALC_DICT = {
     "psi4": Psi4,
     "turbomole": Turbomole,
     "xtb": XTB,
+    "bagel": BAGEL,
+    "bagel_experimental": BAGELEXPT,
     # Analytical potentials
     # "anapot": AnaPot,
 }
