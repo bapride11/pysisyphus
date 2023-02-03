@@ -52,7 +52,7 @@ class OpenMolcas(Calculator):
         self.mcpdft = mcpdft
         self.track = track
 
-        self.to_keep = ("RasOrb", "out", "in", "JobIph", "rasscf.molden")
+        self.to_keep = ("RasOrb", "out", "openmolcas.in", "JobIph", "rasscf.molden")
         self.jobiph = ""
 
         self.inp_fn = "openmolcas.in"
