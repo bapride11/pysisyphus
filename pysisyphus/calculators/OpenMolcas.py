@@ -71,7 +71,6 @@ class OpenMolcas(Calculator):
          {gateway_kwargs}
 
         &seward
-         doanalytical
 
         &rasscf
          charge
