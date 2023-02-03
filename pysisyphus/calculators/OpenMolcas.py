@@ -199,7 +199,7 @@ class OpenMolcas(Calculator):
 
     def parse_energies(self, text):
         if self.mcpdft:
-            root_re = r"PDFT Root\s*\d+\s*Total energy:\s*" + self.float_regex
+            root_re = r"Total MC-PDFT energy for state\s+\d+\s+" + self.float_regex
             matches = re.findall(root_re, text)
             root_energies = np.array(matches, dtype=float)
             root = self.get_root()
