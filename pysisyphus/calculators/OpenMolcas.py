@@ -55,6 +55,11 @@ class OpenMolcas(Calculator):
         assert not (caspt2 and mcpdft), (
             "CASPT2 and MCPDFT cannot be used together."
         )
+        if caspt2 and track:
+            warnings.warn(
+                "Root tracking not yet implemented for CASPT2. Disabling root tracking."
+            )
+            track = False
 
         self.mcpdft = mcpdft
         self.caspt2 = caspt2
