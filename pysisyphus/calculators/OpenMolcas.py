@@ -21,6 +21,7 @@ class OpenMolcas(Calculator):
         rasscf=None,
         gateway=None,
         mcpdft=None,
+        caspt2=None,
         track=True,
         **kwargs,
     ):
@@ -49,7 +50,14 @@ class OpenMolcas(Calculator):
         self.gateway = gateway
         if mcpdft is None:
             mcpdft = {}
+        if caspt2 is None:
+            caspt2 = {}
+        assert not (caspt2 and mcpdft), (
+            "CASPT2 and MCPDFT cannot be used together."
+        )
+
         self.mcpdft = mcpdft
+        self.caspt2 = caspt2
         self.track = track
 
         self.to_keep = ("RasOrb", "out", "openmolcas.in", "JobIph", "rasscf.molden")
@@ -82,6 +90,7 @@ class OpenMolcas(Calculator):
          {rasscf_kwargs}
 
         {mcpdft}
+        {caspt2}
 
         >> copy $Project.JobIph $CurrDir/$Project.JobIph
 
@@ -137,6 +146,14 @@ class OpenMolcas(Calculator):
         mcpdft_kwargs = self.build_str_from_dict(self.mcpdft)
         return f"&mcpdft\n{mcpdft_kwargs}"
 
+    def build_caspt2_str(self,calc_type):
+        if not self.mcpdft:
+            return ""
+
+        grad = "grdt" if calc_type == "grad" else ""
+        caspt2_kwargs = self.build_str_from_dict(self.caspt2)
+        return f"&mcpdft\n{grad}\n{caspt2_kwargs}"
+
     def get_pal_env(self):
         env_copy = os.environ.copy()
         env_copy["MOLCAS_NPROCS"] = str(self.pal)
@@ -160,6 +177,7 @@ class OpenMolcas(Calculator):
             gateway_kwargs=self.build_gateway_str(),
             rasscf_kwargs=self.build_rasscf_str(),
             mcpdft=self.build_mcpdft_str(),
+            caspt2=self.build_caspt2_str(calc_type),
             rassi=self.build_rassi_str(),
             alaska=alaska_str,
         )
@@ -200,6 +218,12 @@ class OpenMolcas(Calculator):
     def parse_energies(self, text):
         if self.mcpdft:
             root_re = r"Total MC-PDFT energy for state\s+\d+\s+" + self.float_regex
+            matches = re.findall(root_re, text)
+            root_energies = np.array(matches, dtype=float)
+            root = self.get_root()
+            energy = root_energies[root - 1]
+        elif self.caspt2:
+            root_re = r"[RX]?(DW-|MS-)?CASPT2 Root\s+\d+\s+Total energy:\s+" + self.float_regex
             matches = re.findall(root_re, text)
             root_energies = np.array(matches, dtype=float)
             root = self.get_root()
