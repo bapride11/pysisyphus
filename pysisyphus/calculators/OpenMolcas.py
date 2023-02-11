@@ -139,10 +139,11 @@ class OpenMolcas(Calculator):
              track
             """
 
-    def build_mcpdft_str(self):
+    def build_mcpdft_str(self,calc_type):
         if not self.mcpdft:
             return ""
 
+        grad = "grad" if calc_type == "grad" else ""
         mcpdft_kwargs = self.build_str_from_dict(self.mcpdft)
         return f"&mcpdft\n{mcpdft_kwargs}"
 
@@ -176,7 +177,7 @@ class OpenMolcas(Calculator):
             mult=self.mult,
             gateway_kwargs=self.build_gateway_str(),
             rasscf_kwargs=self.build_rasscf_str(),
-            mcpdft=self.build_mcpdft_str(),
+            mcpdft=self.build_mcpdft_str(calc_type),
             caspt2=self.build_caspt2_str(calc_type),
             rassi=self.build_rassi_str(),
             alaska=alaska_str,
