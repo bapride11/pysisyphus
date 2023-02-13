@@ -150,7 +150,7 @@ class OpenMolcas(Calculator):
 
         grad = "grad" if calc_type == "grad" else ""
         mcpdft_kwargs = self.build_str_from_dict(self.mcpdft)
-        return f"&mcpdft\n{mcpdft_kwargs}"
+        return f"&mcpdft\n{grad}\n{mcpdft_kwargs}"
 
     def build_caspt2_str(self,calc_type):
         if not self.mcpdft:
