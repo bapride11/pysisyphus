@@ -19,7 +19,6 @@ calc:
   cmsi:
  mcpdft:
   ksdft: t:pbe
-  grad:
   mspdft:
 opt:
  thresh: gau
