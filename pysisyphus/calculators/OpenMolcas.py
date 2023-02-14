@@ -70,7 +70,7 @@ class OpenMolcas(Calculator):
 
         self.inp_fn = "openmolcas.in"
         self.out_fn = "openmolcas.out"
-        self.float_regex = r"([\d\.\-E]+)"
+        self.float_regex = r"(-?[\d\.]+[E\+\-\d]*)"
 
         self.openmolcas_input = """
         >> copy {inporb}  $Project.RasOrb
@@ -225,9 +225,18 @@ class OpenMolcas(Calculator):
         if self.mcpdft:
             root_re = r"Total MC-PDFT energy for state\s+\d+\s+" + self.float_regex
             matches = re.findall(root_re, text)
-            root_energies = np.array(matches, dtype=float)
-            root = self.get_root()
-            energy = root_energies[root - 1]
+            # Try MC-PDFT with no state interaction terms
+            if matches:
+                root_energies = np.array(matches, dtype=float)
+                root = self.get_root()
+                energy = root_energies[root - 1]
+            # Otherwise, look for multistate (CMS or XMS)-PDFT
+            else:
+                root_re = r"PDFT Root\s*\d+\s*Total energy:\s*" + self.float_regex
+                matches = re.findall(root_re, text)
+                root_energies = np.array(matches, dtype=float)
+                root = self.get_root()
+                energy = root_energies[root - 1]
         elif self.caspt2:
             root_re = r"[RX]?(DW-|MS-)?CASPT2 Root\s+\d+\s+Total energy:\s+" + self.float_regex
             matches = re.findall(root_re, text)
