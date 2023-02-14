@@ -153,12 +153,12 @@ class OpenMolcas(Calculator):
         return f"&mcpdft\n{grad}\n{mcpdft_kwargs}"
 
     def build_caspt2_str(self,calc_type):
-        if not self.mcpdft:
+        if not self.caspt2:
             return ""
 
         grad = "grdt" if calc_type == "grad" else ""
         caspt2_kwargs = self.build_str_from_dict(self.caspt2)
-        return f"&mcpdft\n{grad}\n{caspt2_kwargs}"
+        return f"&caspt2\n{grad}\n{caspt2_kwargs}"
 
     def get_pal_env(self):
         env_copy = os.environ.copy()
