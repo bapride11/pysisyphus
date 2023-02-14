@@ -57,7 +57,7 @@ class OpenMolcas(Calculator):
 
         self.inp_fn = "openmolcas.in"
         self.out_fn = "openmolcas.out"
-        self.float_regex = r"([\d\.\-E]+)"
+        self.float_regex = r"(-?[\d\.]+[E\+\-\d]*)"
 
         self.openmolcas_input = """
         >> copy {inporb}  $Project.RasOrb
