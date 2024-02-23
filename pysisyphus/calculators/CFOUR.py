@@ -245,6 +245,21 @@ class CFOUR(Calculator):
         inp = self.prepare_input(atoms, coords, calc_type, **prepare_kwargs)
         results = self.run(inp, calc=calc_type)
         return results
+    
+    def get_chkfiles(self):
+        return {
+            "initden": self.initden,
+        }
+
+
+    def set_chkfiles(self, chkfiles):
+        try:
+            initden = chkfiles["initden"]
+            self.initden = initden
+            self.log(f"Set chkfile '{initden}' as initden.")
+        except KeyError:
+            self.log("Found no initden information in chkfiles!")
+
 
     def __str__(self):
         return f"CFOUR({self.name})"
