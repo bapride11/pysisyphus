@@ -107,6 +107,7 @@ class CFOUR(Calculator):
         cfour_input,
         wavefunction_dump=True,
         initden_file=None,
+        oldmos_file=None,
         **kwargs,
     ):
         """CFOUR calculator.
@@ -130,14 +131,17 @@ class CFOUR(Calculator):
         self.inp_fn = "ZMAT"
         self.out_fn = "out.log"
         self.gradient_fn = "GRD"
-        self.to_keep = ("out.log", "density:__den.dat")
+        self.to_keep = ("out.log", "density:__den.dat", "mos:NEWMOS")
         self.initden = None
+        self.mos = None
         self.wavefunction_dump = wavefunction_dump
 
         if self.wavefunction_dump:
             self.to_keep = self.to_keep + ("MOLDEN*",)
         if initden_file:
             self.initden = initden_file
+        if oldmos_file:
+            self.mos = oldmos_file
 
         self.base_cmd = self.get_cmd("cmd")
         self.parser_funcs = {
@@ -158,12 +162,15 @@ class CFOUR(Calculator):
         path = super().prepare(inp)
         if self.initden:
             shutil.copy(self.initden, f"{path}/initden.dat")
+        if self.mos:
+            shutil.copy(self.mos, f"{path}/GUESS")
         return path
 
     def keep(self, path):
         kept_fns = super().keep(path)
         try:
             self.initden = kept_fns["density"]
+            self.mos = kept_fns["mos"]
         except KeyError:
             self.log("den.dat not found!")
 
@@ -247,18 +254,23 @@ class CFOUR(Calculator):
         return results
     
     def get_chkfiles(self):
+        self.log("Called get_chkfiles")
         return {
             "initden": self.initden,
+            "mos": self.mos,
         }
 
 
     def set_chkfiles(self, chkfiles):
+        self.log("Called set_chkfiles")
         try:
             initden = chkfiles["initden"]
+            mos = chkfiles["mos"]
             self.initden = initden
-            self.log(f"Set chkfile '{initden}' as initden.")
+            self.mos = mos
+            self.log(f"Set chkfile '{initden}' as initden and {mos} as OLDMOS.")
         except KeyError:
-            self.log("Found no initden information in chkfiles!")
+            self.log("Missing either initden or OLDMOS in chkfiles")
 
 
     def __str__(self):
