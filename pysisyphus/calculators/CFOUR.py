@@ -123,6 +123,8 @@ class CFOUR(Calculator):
             Whether or not to keep ground state SCF orbitals for each geometry step.
         initden_file: str, optional
             Path to an input initden file for use as a guess SCF density.
+        oldmos_files: str, optional
+            Path to guess orbitals.
         """
         super().__init__(**kwargs)
 
@@ -131,16 +133,36 @@ class CFOUR(Calculator):
         self.inp_fn = "ZMAT"
         self.out_fn = "out.log"
         self.gradient_fn = "GRD"
-        self.to_keep = ("out.log", "density:__den.dat", "mos:NEWMOS")
+
         self.initden = None
         self.mos = None
+        self.qcscf = False
         self.wavefunction_dump = wavefunction_dump
 
+        if "qcscf" in [str(x).lower() for x in cfour_input.values()]:
+            self.qcscf = True
+        
         if self.wavefunction_dump:
-            self.to_keep = self.to_keep + ("MOLDEN*",)
+            self.to_keep = ("out.log", "density:__den.dat", "mos:NEWMOS", "MOLDEN*")
+        else:
+            if not self.qcscf:
+                self.to_keep = ("out.log", "density:__den.dat", "mos:NEWMOS")
+            else:
+                self.to_keep = ("out.log",)
+        
         if initden_file:
+            assert self.qcscf == False, (
+                "QCSCF does not support guess densities "
+                "or orbitals, and presence of a GUESS "
+                "file can cause unexpected behavior."
+            )
             self.initden = initden_file
         if oldmos_file:
+            assert self.qcscf == False, (
+                "QCSCF does not support guess densities "
+                "or orbitals, and presence of a GUESS "
+                "file can cause unexpected behavior."
+            )
             self.mos = oldmos_file
 
         self.base_cmd = self.get_cmd("cmd")
@@ -160,19 +182,21 @@ class CFOUR(Calculator):
 
     def prepare(self, inp):
         path = super().prepare(inp)
-        if self.initden:
-            shutil.copy(self.initden, f"{path}/initden.dat")
-        if self.mos:
-            shutil.copy(self.mos, f"{path}/GUESS")
+        if not self.qcscf:
+            if self.initden:
+                shutil.copy(self.initden, f"{path}/initden.dat")
+            if self.mos:
+                shutil.copy(self.mos, f"{path}/GUESS")
         return path
 
     def keep(self, path):
         kept_fns = super().keep(path)
-        try:
-            self.initden = kept_fns["density"]
-            self.mos = kept_fns["mos"]
-        except KeyError:
-            self.log("den.dat not found!")
+        if self.wavefunction_dump or not self.qcscf:
+            try:
+                self.initden = kept_fns["density"]
+                self.mos = kept_fns["mos"]
+            except KeyError:
+                self.log("NEWMOS or den.dat not found!")
 
     def prepare_input(self, atoms, coords, calc_type):
         xyz_string = self.prepare_coords(atoms, coords)
@@ -254,7 +278,6 @@ class CFOUR(Calculator):
         return results
     
     def get_chkfiles(self):
-        self.log("Called get_chkfiles")
         return {
             "initden": self.initden,
             "mos": self.mos,
@@ -262,15 +285,17 @@ class CFOUR(Calculator):
 
 
     def set_chkfiles(self, chkfiles):
-        self.log("Called set_chkfiles")
-        try:
-            initden = chkfiles["initden"]
-            mos = chkfiles["mos"]
-            self.initden = initden
-            self.mos = mos
-            self.log(f"Set chkfile '{initden}' as initden and {mos} as OLDMOS.")
-        except KeyError:
-            self.log("Missing either initden or OLDMOS in chkfiles")
+        if not self.qcscf:
+            try:
+                initden = chkfiles["initden"]
+                mos = chkfiles["mos"]
+                self.initden = initden
+                self.mos = mos
+                self.log(f"Set chkfile '{initden}' as initden and {mos} as OLDMOS.")
+            except KeyError:
+                self.log("Missing either initden or OLDMOS in chkfiles")
+        else:
+            self.log("Cannot set chkfiles on calculation using QCSCF.")
 
 
     def __str__(self):
