@@ -66,19 +66,20 @@ class Instanton:
         self.beta_hbar = beta_hbar_fs
         self.P_over_beta_hbar = self.P / self.beta_hbar
         self.P_bh = self.P_over_beta_hbar
-        """The Instanton is periodic: the first image is connected to the
-        last image.
-        At k=0 the index k-1 will be -1, which points to the last image.
+        """The Instanton is periodic, but we only optimize the unique half of the path.
+        At k=0 the index k-1 will be 0, which points to the first image.
+        At k=P, the index k+1 will be P, which points to the last image.
 
         Below we pre-calculate some indices (assuming N images).
-            unshifted indices ks: k = {0, 1, .. , N-1}
-            shifted indices ksm1: k-1 = {-1, 0, 1, .. , N-2}
-            shifted indices ksp1: k+1 = {1, 2, .. , N-1, 0}
+            unshifted indices ks: k = {0, 1, .. , P-1}
+            shifted indices ksm1: k-1 = {0, 0, 1, .. , P-2}
+            shifted indices ksp1: k+1 = {1, 2, .. , P-1, P-1}
         """
         self.ks = np.arange(self.P)
         self.ksm1 = self.ks - 1
         self.ksp1 = self.ks + 1
-        self.ksp1[-1] = 0  # k+1 for the last image points to the first image
+        self.ksp1[-1] = -1  # k+1 for the last image points to the last image
+        self.ksm1[0] = 0 # k-1 for first image points to the first image
 
         self.coord_type = "mwcartesian"
         self.internal = None
@@ -146,7 +147,8 @@ class Instanton:
 
         energies = [image.energy for image in self.images]
         S_pot = 1 / self.P_bh * sum(energies)
-        S_E = S_0 / 2 + S_pot
+        # Sum is only over only half the path
+        S_E = 2*S_0 + S_pot
         results = {
             "action": S_E,
         }
@@ -189,6 +191,10 @@ class Instanton:
             d y_k
 
             =   2 * (2 * y_k - y_(k-1) - y_(k+1)) .
+        
+        Distances beyond endpoints of half-instanton are always zero due to periodicity,
+        with derivative zero, which requires no special handling if boundary conditions
+        are set appropriately.
         """
         image_coords = np.array([image.coords for image in self.images])
         kin_grad = (
@@ -207,7 +213,7 @@ class Instanton:
             ]
         ).flatten()
         pot_grad /= self.P_bh
-        gradient = kin_grad / 2 + pot_grad
+        gradient = 2*kin_grad + pot_grad
         # gradient = pot_grad
         # gradient = kin_grad
         # gradient = kin_grad / 2
@@ -237,7 +243,7 @@ class Instanton:
         kp[ks, ksp1] = 1.0
         kin_hess = 4 * np.eye(coord_num) - 2 * km - 2 * kp  # y_k  # y_k-1  # y_k+1
         kin_hess *= self.P_bh
-        hessian = kin_hess / 2 + pot_hess
+        hessian = 2*kin_hess + pot_hess
         # hessian = pot_hess
         # hessian = kin_hess / 2
         results = {
