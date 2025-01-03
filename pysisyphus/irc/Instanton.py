@@ -15,7 +15,7 @@ import scipy as sp
 
 from pysisyphus import logger as pysis_logger
 from pysisyphus.Geometry import Geometry
-from pysisyphus.helpers import align_coords, get_coords_diffs
+from pysisyphus.helpers import align_coords
 from pysisyphus.helpers_pure import eigval_to_wavenumber
 
 
@@ -289,9 +289,12 @@ class Instanton:
 
     @property
     def path_length(self):
-        image_coords3d = [image.coords3d for image in self.images]
-        coord_diffs = get_coords_diffs(image_coords3d, align=False, normalize=False)
-        length = coord_diffs.sum()
+        """Yields length of the discretized instanton path,
+           which is only approximately half the instanton length."""
+        image_coords = [image.coords for image in self.images]
+        length = 0
+        for i in range(1, self.P):
+            length += np.linalg.norm(image_coords[i] - image_coords[i-1])
         return length
 
     def get_additional_print(self):
