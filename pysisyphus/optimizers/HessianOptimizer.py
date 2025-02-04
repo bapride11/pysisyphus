@@ -435,10 +435,11 @@ class HessianOptimizer(Optimizer):
             f"Found {small_num} small eigenvalues in Hessian. Removed "
             "corresponding eigenvalues and eigenvectors."
         )
-        assert small_num <= 6, (
-            "Expected at most 6 small eigenvalues in cartesian hessian "
-            f"but found {small_num}!"
-        )
+        if small_num > 6:
+            self.log(
+                f"WARNING: Expected at most 6 small eigenvalues in cartesian hessian "
+                f"but found {small_num}!"
+            )
         if mask:
             return eigvals, eigvecs, small_inds
         else:
