@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from scipy.optimize import newton
+from scipy.optimize import newton, minimize_scalar
 from pysisyphus.tsoptimizers.TSHessianOptimizer import TSHessianOptimizer
 
 
@@ -41,12 +41,23 @@ class TRIM(TSHessianOptimizer):
         def func(mu):
             return get_step_norm(mu) - self.trust_radius
 
+        def func2(mu):
+            return (get_step_norm(mu) - self.trust_radius)**2
+
         mu = 0
         norm0 = get_step_norm(mu)
         if norm0 > self.trust_radius:
-            mu, res = newton(func, x0=mu, full_output=True)
-            assert res.converged
-            self.log(f"Using levelshift of μ={mu:.4f}")
+            try:
+                mu, res = newton(func, x0=mu, full_output=True)
+                assert res.converged
+                self.log(f"Using levelshift of μ={mu:.4f}")
+            except(RuntimeError, AssertionError):
+                self.log("Newton's method for the determination of μ failed.")
+                self.log("Trying alternative strategy.")
+                res = minimize_scalar(func2, bracket=(-0.1, 0.1))
+                mu = res.x
+                self.log(f"Using levelshift of μ={mu:.4f}")
+
         else:
             self.log("Took pure newton step without levelshift")
 
