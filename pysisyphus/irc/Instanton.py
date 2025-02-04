@@ -8,15 +8,24 @@
 #     Ring-polymer instanton theory of electron transofer in the
 #     nonadiabatic limit
 #     Richardson, 2015
+# [4] https://dx.doi.org/10.1063/1.3587240
+#     Adaptive integration grids in instanton theory
+#     improve the numerical accuracy at low temperature
+#     Rommel, Kästner, 2011
+
 import logging
+from math import fsum
 
 import numpy as np
+from numpy.typing import NDArray
 import scipy as sp
+from distributed import Client
 
 from pysisyphus import logger as pysis_logger
 from pysisyphus.Geometry import Geometry
 from pysisyphus.helpers import align_coords
 from pysisyphus.helpers_pure import eigval_to_wavenumber
+from pysisyphus.optimizers.hessian_updates import bofill_update
 
 
 def T_crossover_from_eigval(eigval):
@@ -52,20 +61,23 @@ def log_progress(val, key, i):
 
 
 class Instanton:
-    def __init__(self, images, calc_getter, T):
+    def __init__(self, images, calc_getter, T, scheduler_file=None):
         self.images = images
-        self.calc_getter = calc_getter
         for image in self.images:
             image.set_calculator(calc_getter())
         self.T = T
+        self.scheduler_file = scheduler_file
 
         # Pre-calculate action prefactors for the given temperature
-        beta = 1 / (sp.constants.Boltzmann * self.T)  # Joule
-        beta_hbar = beta * sp.constants.hbar  # seconds
-        beta_hbar_fs = beta_hbar * 1e15  # fs
-        self.beta_hbar = beta_hbar_fs
+        self.beta_hbar = 1 / (
+            sp.constants.value("kelvin-hartree relationship") * self.T
+        )  # in hbar * Eh^-1
         self.P_over_beta_hbar = self.P / self.beta_hbar
         self.P_bh = self.P_over_beta_hbar
+        self.dks = np.array([1 / (2 * self.P_bh)] * (self.P + 1))
+        self.amu_to_me = (
+            sp.constants.value("atomic mass constant") / sp.constants.electron_mass
+        )
         """The Instanton is periodic, but we only optimize the unique half of the path.
         At k=0 the index k-1 will be 0, which points to the first image.
         At k=P, the index k+1 will be P, which points to the last image.
@@ -79,7 +91,7 @@ class Instanton:
         self.ksm1 = self.ks - 1
         self.ksp1 = self.ks + 1
         self.ksp1[-1] = -1  # k+1 for the last image points to the last image
-        self.ksm1[0] = 0 # k-1 for first image points to the first image
+        self.ksm1[0] = 0  # k-1 for first image points to the first image
 
         self.coord_type = "mwcartesian"
         self.internal = None
@@ -138,20 +150,16 @@ class Instanton:
         for img_coords, image in zip(coords, self.images):
             image.coords = img_coords
 
-    def action(self):
-        """Action in au / fs, Hartree per femtosecond."""
-        all_coords = np.array([image.coords for image in self.images])
-        diffs = all_coords[self.ks] - all_coords[self.ksm1]
-        dists = np.linalg.norm(diffs, axis=1)
-        S_0 = self.P_bh * (dists**2).sum()
+    def action(self, reactant_E=0.0):
+        """Returns action in units of hbar (atomic units)."""
+        dists = self.get_image_distances()
+        S_kin = 2 * self.P_bh * (dists ** 2).sum() * self.amu_to_me
 
-        energies = [image.energy for image in self.images]
-        S_pot = 1 / self.P_bh * sum(energies)
+        energies = [image.energy - reactant_E for image in self.images]
+        S_pot = sum(energies) / self.P_bh
         # Sum is only over only half the path
-        S_E = 2*S_0 + S_pot
-        results = {
-            "action": S_E,
-        }
+        S_E = S_kin + S_pot
+        results = {"action": S_E, "S0": S_kin * 2}
         return results
 
     def action_gradient(self):
@@ -194,7 +202,8 @@ class Instanton:
         
         Distances beyond endpoints of half-instanton are always zero due to periodicity,
         with derivative zero, which requires no special handling if boundary conditions
-        are set appropriately.
+        are set appropriately. The "overcounting" here adds zero, which is no problem for
+        the gradient, but leads to issues in the hessian.
         """
         image_coords = np.array([image.coords for image in self.images])
         kin_grad = (
@@ -205,60 +214,133 @@ class Instanton:
                 - image_coords[self.ksp1]  # y_(k+1)
             ).flatten()
         )
-        kin_grad *= self.P_bh
-        pot_grad = np.array(
-            [
-                log_progress(image.gradient, "gradient", i)
-                for i, image in enumerate(self.images)
-            ]
-        ).flatten()
+        kin_grad *= 2 * self.P_bh * self.amu_to_me
+        if self.scheduler_file:
+            pot_grad = self.parallel_image_gradients().flatten()
+        else:
+            pot_grad = np.array(
+                [
+                    log_progress(image.gradient, "gradient", i)
+                    for i, image in enumerate(self.images)
+                ]
+            ).flatten()
         pot_grad /= self.P_bh
-        gradient = 2*kin_grad + pot_grad
+        gradient = kin_grad + pot_grad
         # gradient = pot_grad
         # gradient = kin_grad
         # gradient = kin_grad / 2
-        results = {
-            "gradient": gradient,
-        }
+        results = {"gradient": gradient}
         results.update(self.action())
         return results
 
     def action_hessian(self):
-        image_hessians = [
-            log_progress(image.hessian, "hessian", i)
-            for i, image in enumerate(self.images)
-        ]
+        if self.scheduler_file:
+            image_hessians = self.parallel_image_hessians()
+        else:
+            image_hessians = [
+                log_progress(image.hessian, "hessian", i)
+                for i, image in enumerate(self.images)
+            ]
         pot_hess = sp.linalg.block_diag(*image_hessians)
         pot_hess /= self.P_bh
         coord_num = pot_hess.shape[0]
         zeroes = np.zeros((coord_num, coord_num))
         image_coord_num = self.images[0].coords.size
-        inds = np.arange(coord_num).reshape(-1, image_coord_num)
-        ks = inds[self.ks].flatten()
-        ksm1 = inds[self.ksm1].flatten()
-        ksp1 = inds[self.ksp1].flatten()
-        km = zeroes.copy()
-        km[ks, ksm1] = 1.0
-        kp = zeroes.copy()
-        kp[ks, ksp1] = 1.0
-        kin_hess = 4 * np.eye(coord_num) - 2 * km - 2 * kp  # y_k  # y_k-1  # y_k+1
-        kin_hess *= self.P_bh
-        hessian = 2*kin_hess + pot_hess
-        # hessian = pot_hess
-        # hessian = kin_hess / 2
-        results = {
-            "hessian": hessian,
-        }
-        results.update(self.action())
+        kronecker_delta = np.arange(image_coord_num)
+        km = np.zeros((self.P, image_coord_num, self.P, image_coord_num))
+        lm = np.zeros((self.P, image_coord_num, self.P, image_coord_num))
+        for k, l in zip(self.ksm1, self.ks):
+            km[k, :, l, :] = np.eye(image_coord_num)
+            lm[l, :, k, :] = np.eye(image_coord_num)
+        # Dirty hack - First k doesn't "have" k-1 in the optimization functional
+        km[0, :, 0, :] = 0.0
+        lm[0, :, 0, :] = 0.0
+        kin_hess = (
+            4 * np.eye(coord_num)
+            - 2 * km.reshape((coord_num, coord_num))
+            - 2 * lm.reshape((coord_num, coord_num))
+        )
+        # First and last k only appear once
+        kin_hess[:image_coord_num, :image_coord_num] = 2 * np.eye(image_coord_num)
+        kin_hess[
+            (self.P - 1) * image_coord_num :, (self.P - 1) * image_coord_num :
+        ] = 2 * np.eye(image_coord_num)
+        kin_hess *= 2 * self.P_bh * self.amu_to_me
+        hessian = kin_hess + pot_hess
+        results = {"hessian": hessian, "kin": kin_hess, "pot": pot_hess}
         return results
+
+    def full_action_hessian(self):
+        """Returns action hessian of the full, redundant path in atu^-1."""
+        if self.scheduler_file:
+            image_hessians = self.parallel_image_hessians()
+        else:
+            image_hessians = [
+                log_progress(image.hessian, "hessian", i)
+                for i, image in enumerate(self.images)
+            ]
+        image_hessians = image_hessians + list(reversed(image_hessians))
+        pot_hess = sp.linalg.block_diag(*image_hessians)
+        pot_hess /= self.P_bh * 2 * self.amu_to_me
+
+        coord_num = pot_hess.shape[0]
+
+        image_coord_num = self.images[0].coords.size
+        kin_hess = np.zeros((2 * self.P, image_coord_num, 2 * self.P, image_coord_num))
+        for k in range(1, 2 * self.P):
+            kin_hess[k, :, k, :] = 4 * np.eye(image_coord_num)
+            kin_hess[k, :, k - 1, :] = -2 * np.eye(image_coord_num)
+            kin_hess[k - 1, :, k, :] = -2 * np.eye(image_coord_num)
+        kin_hess[0, :, 0, :] = 4 * np.eye(image_coord_num)
+        kin_hess[0, :, 2 * self.P - 1, :] = -2 * np.eye(image_coord_num)
+        kin_hess[2 * self.P - 1, :, 0, :] = -2 * np.eye(image_coord_num)
+        kin_hess *= 2 * self.P_bh
+
+        kin_hess = kin_hess.reshape((coord_num, coord_num))
+
+        h = kin_hess / 2 + pot_hess
+        return h
+
+    def get_dask_client(self):
+        return Client(scheduler_file=self.scheduler_file)
+
+    def parallel_image_gradients(self):
+        client = self.get_dask_client()
+        image_futures = client.map(
+            self.get_image_gradient, self.images, list(range(self.P))
+        )
+        self.set_images(list(range(self.P)), client.gather(image_futures))
+        return np.array([image.gradient for image in self.images])
+
+    def parallel_image_hessians(self):
+        client = self.get_dask_client()
+        image_futures = client.map(
+            self.get_image_hessian, self.images, list(range(self.P))
+        )
+        self.set_images(list(range(self.P)), client.gather(image_futures))
+        return np.array([image.hessian for image in self.images])
+
+    def get_image_gradient(self, image, i):
+        g = image.gradient
+        return image
+
+    def get_image_hessian(self, image, i):
+        h = image.hessian
+        return image
+
+    def set_images(self, indices, images):
+        for ind, image in zip(indices, images):
+            self.images[ind] = image
 
     @property
     def energy(self):
-        return self.action()["action"]
+        """Scales action to energy in hartree."""
+        return self.action()["action"] / self.beta_hbar
 
     @property
     def gradient(self):
-        return self.action_gradient()["gradient"]
+        """In hartree / (bohr * amu^0.5)"""
+        return self.action_gradient()["gradient"] / self.beta_hbar
 
     @property
     def forces(self):
@@ -266,7 +348,8 @@ class Instanton:
 
     @property
     def hessian(self):
-        return self.action_hessian()["hessian"]
+        """In hartree / (bohr^2 amu)"""
+        return self.action_hessian()["hessian"] / self.beta_hbar
 
     @property
     def cart_hessian(self):
@@ -287,16 +370,176 @@ class Instanton:
     def is_analytical_2d(self):
         return self.images[0].is_analytical_2d
 
+    def get_image_distances(self) -> NDArray:
+        all_coords = np.array([image.coords for image in self.images])
+        diffs = all_coords[self.ks] - all_coords[self.ksm1]
+        dists = np.linalg.norm(diffs, axis=1)
+        return dists
+
+    def calc_instanton_rate(self, reactant_E, reactant_freqs):
+        """Calculates the thermal instanton rate in s^-1, given
+           the reactant vibrational frequencies in cm^-1."""
+        # in Hartree, which is numerically equal in atomic units to "per atomic time",
+        # differing only in factors of hbar - i.e. sqrt(lambda^V) in [4]
+        rfreqs = (
+            np.array(reactant_freqs)
+            * 100
+            / sp.constants.value("hartree-inverse meter relationship")
+        )
+        instanton_action_hessian = self.full_action_hessian()
+        w, _ = np.linalg.eigh(instanton_action_hessian)
+        w2, _ = np.linalg.eigh(self.action_hessian()["hessian"])
+        print(f"w2: {w2[:6+2]}")
+        w = np.sort(w)
+        d = 1 / (2 * self.P_bh)
+        sinfactors = (4 / d) * np.sin(
+            np.pi * np.arange(1, 2 * self.P + 1) / (2 * self.P)
+        ) ** 2
+        dlv = d * rfreqs ** 2
+        N0 = 6
+        reactant_vals = np.sort(
+            np.concatenate(
+                (
+                    np.add.outer(sinfactors, dlv).flatten(),
+                    [1 / d] * (N0 * (2 * self.P - 1)),
+                )
+            )
+        )
+        print(len(reactant_vals))
+        w = np.sort(np.abs(w))
+        print(f"Dropping eigenvalues: {w[:N0+1]}")
+        print(f"Next eigenvalue greater: {w[N0+1]}")
+        path_vals = w[N0:]
+        path_vals[0] = d
+        path_vals = np.sort(path_vals)
+        N = len(reactant_freqs) + N0
+        assert len(path_vals) == len(reactant_vals)
+        sumvals = fsum((np.log(reactant_vals) - np.log(path_vals))) / 2
+        sumvals += N0 * np.log(self.P * 2)
+
+        actioncalc = self.action(reactant_E)
+        S0 = actioncalc["S0"]
+        SE = actioncalc["action"]
+        k_inst = (
+            np.sqrt(S0 / (2 * np.pi))
+            * np.exp(sumvals - SE)
+            / sp.constants.value("atomic unit of time")
+        )
+        print(f"Action: {SE}")
+        print(f"Action contrib: {np.exp(-SE)}")
+        print(f"S0: {S0}")
+        return k_inst
+
     @property
     def path_length(self):
         """Yields length of the discretized instanton path,
            which is only approximately half the instanton length."""
-        image_coords = [image.coords for image in self.images]
-        length = 0
-        for i in range(1, self.P):
-            length += np.linalg.norm(image_coords[i] - image_coords[i-1])
-        return length
+        return self.get_image_distances().sum()
+
+    def tunneling_energy(self):
+        dists = self.get_image_distances()
+        Vbs = [
+            self.images[i].energy
+            - (dists[i] * dists[i + 1])
+            / (2 * self.dks[i] * self.dks[i + 1])
+            * self.amu_to_me
+            for i in range(1, self.P - 1)
+        ]
+        return np.median(Vbs)
 
     def get_additional_print(self):
         length = self.path_length
-        return f"\t\tInstanton length={length:.2f} √a̅m̅u̅·au"
+        e = self.tunneling_energy()
+        result = (
+            f"\t\tInstanton length={length:.2f} √a̅m̅u̅·au"
+        )  # \n\t\tTunneling energy={e:.6e} E_h"
+        return result
+
+
+class InstantonImage:
+    def __init__(self, geometry: Geometry, cart_hessian, update_minstepsquared=1e-5):
+        self._valid = {"energy": False, "gradient": False, "hessian": False}
+        self._geometry = geometry
+        self._prev_coords = geometry.coords.copy()
+        self.set_cart_hessian(cart_hessian)
+        self.update_minstepsquared = update_minstepsquared
+
+    @property
+    def coords(self):
+        return self._geometry.coords
+
+    @coords.setter
+    def coords(self, new_coords):
+        self._prev_coords = self._geometry.coords.copy()
+        self._geometry.coords = new_coords
+        for key in self._valid:
+            self._valid[key] = False
+
+    @property
+    def coords3d(self):
+        return self._geometry.coords3d
+
+    @property
+    def cart_coords(self):
+        return self._geometry.cart_coords
+
+    @property
+    def atoms(self):
+        return self._geometry.atoms
+
+    @property
+    def energy(self):
+        if self._valid["energy"]:
+            return self._energy
+        else:
+            self._energy = self._geometry.energy
+            self._valid["energy"] = True
+            return self._energy
+
+    @property
+    def gradient(self):
+        if self._valid["gradient"]:
+            return self._gradient.copy()
+        else:
+            try:
+                self._prev_gradient = self._gradient.copy()
+                self._gradient = self._geometry.gradient.copy()
+            except:
+                self._prev_gradient = self._geometry.gradient.copy()
+                self._gradient = self._prev_gradient.copy()
+            self._valid["gradient"] = True
+            return self._gradient.copy()
+
+    @property
+    def forces(self):
+        return -self.gradient
+
+    @property
+    def cart_forces(self):
+        return self._geometry.cart_forces
+
+    @property
+    def hessian(self):
+        if self._valid["hessian"]:
+            return self._hessian
+        else:
+            dx = self.coords - self._prev_coords
+            # Update hessian only with sufficient change in geometry,
+            # as in [2].
+            if dx @ dx > self.update_minstepsquared:
+                dg = self.gradient - self._prev_gradient
+                dH, _ = bofill_update(self._hessian, dx, dg)
+                self._hessian += dH
+            self._valid["hessian"] = True
+            return self._hessian
+
+    def set_calculator(self, value):
+        self._geometry.set_calculator(value)
+
+    def set_cart_hessian(self, value):
+        self._geometry.cart_hessian = value
+        self._hessian = self._geometry.internal.transform_hessian(value)
+        self._valid["hessian"] = True
+
+    def as_xyz(self):
+        return self._geometry.as_xyz()
